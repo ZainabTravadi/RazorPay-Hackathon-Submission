@@ -6,7 +6,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from apps.api.routes import dashboard, historical_incidents, incidents, metrics, payments, providers, simulator, investigations, recovery
+from apps.api.routes import dashboard, historical_incidents, incidents, metrics, payments, providers, simulator, investigations, recovery, replay
 from database.init_db import init_db
 
 app = FastAPI(title="FluxPay", version="0.1.0")
@@ -27,6 +27,7 @@ app.include_router(providers.router)
 app.include_router(simulator.router)
 app.include_router(investigations.router)
 app.include_router(recovery.router)
+app.include_router(replay.router)
 
 
 @app.on_event("startup")

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import ReplayPanel from './ReplayPanel'
 
 const API_URL = `${import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'}/api`
 
@@ -205,6 +206,7 @@ export default function App() {
   const [recommendation, setRecommendation] = useState<any>(null)
   const [policy, setPolicy] = useState<any>(null)
   const [recovery, setRecovery] = useState<RecoveryExecution | null>(null)
+  const [replayTargetId, setReplayTargetId] = useState<string | null>(null)
   const [scenario, setScenario] = useState<(typeof scenarios)[number]['value']>(scenarios[0].value)
   const [busy, setBusy] = useState<'inject' | 'reset' | 'prepare' | 'approve' | 'execute' | ''>('')
   const [error, setError] = useState<string | null>(null)
@@ -279,6 +281,7 @@ export default function App() {
 
   const loadIncidentWorkspace = async (nextIncident: Incident) => {
     setSelectedIncident(nextIncident)
+    setReplayTargetId(null)
     setWorkspaceLoading(true)
     setError(null)
     setInvestigation(null)
@@ -327,6 +330,15 @@ export default function App() {
     await loadIncidentWorkspace(nextIncident)
   }
 
+  const openReplayForSelectedIncident = () => {
+    if (!selectedIncident) return
+    setReplayTargetId(selectedIncident.incident_id)
+  }
+
+  const openHistoricalReplay = (incidentId: string) => {
+    setReplayTargetId(incidentId)
+  }
+
   const investigate = async () => {
     if (!selectedIncident) return
     setInvestigating(true)
@@ -350,6 +362,7 @@ export default function App() {
     try {
       await api('/simulator/reset', { method: 'POST' })
       setSelectedIncident(null)
+      setReplayTargetId(null)
       setInvestigation(null)
       setImpact(null)
       setTimeline([])
@@ -425,6 +438,8 @@ export default function App() {
     if (!selectedIncident) return []
     return buildChronology(selectedIncident, investigation, recovery, timeline)
   }, [investigation, recovery, selectedIncident, timeline])
+
+  const selectedReplayId = replayTargetId ?? null
 
   const incidentProgress = useMemo(() => {
     if (!selectedIncident) return []
@@ -709,7 +724,7 @@ export default function App() {
             </div>
           </section>
 
-          {selectedIncident && (
+          {selectedIncident && !selectedReplayId && (
             <section className="workspace" ref={workspaceRef}>
               <div className="workspace-header">
                 <div className="incident-identity">
@@ -764,6 +779,9 @@ export default function App() {
                     <span>{selectedIncident.affected_merchants.toLocaleString()} merchants touched</span>
                     <span>{formatMoney(selectedIncident.revenue_at_risk)} estimated revenue at risk</span>
                   </div>
+                  <button type="button" className="button secondary full-width" onClick={openReplayForSelectedIncident}>
+                    Replay incident
+                  </button>
                 </div>
               </div>
 
@@ -1092,6 +1110,49 @@ export default function App() {
               </div>
             </section>
           )}
+
+          <section className="panel historical-panel">
+            <div className="panel-head compact">
+              <div>
+                <p className="section-kicker">Historical incidents</p>
+                <h2>Replay prior incidents without opening the live workspace</h2>
+              </div>
+              <span className="panel-meta">{historicalIncidents.length} archived</span>
+            </div>
+
+            {historicalIncidents.length === 0 ? (
+              <div className="empty-inline historical-empty">
+                <strong>No historical incidents are available yet.</strong>
+                <p>Seeded historical incidents will appear here once the database contains archived outcomes.</p>
+              </div>
+            ) : (
+              <div className="historical-grid">
+                {historicalIncidents.slice(0, 6).map((item) => (
+                  <article key={item.incident_id} className="historical-card">
+                    <div>
+                      <p>{formatLabel(item.incident_type)}</p>
+                      <strong>{item.incident_id}</strong>
+                      <span>{formatShortDate(item.timestamp)}</span>
+                    </div>
+                    <div className="historical-card-meta">
+                      <small>{item.root_cause}</small>
+                      <span>{item.resolution}</span>
+                      <b>{Math.round(item.recovery_rate * 100)}% recovered</b>
+                    </div>
+                    <button type="button" className="button secondary" onClick={() => openHistoricalReplay(item.incident_id)}>
+                      Replay
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+
+          {selectedReplayId ? (
+            <section className="workspace replay-workspace">
+              <ReplayPanel incidentId={selectedReplayId} onExit={() => setReplayTargetId(null)} />
+            </section>
+          ) : null}
         </main>
       </div>
     </div>
