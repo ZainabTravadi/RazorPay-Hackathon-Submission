@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from apps.api.main import app
 from apps.api.services.investigation_tools import TOOLS, call_tool
 from apps.api.services.investigator import evidence_confidence
+from database.models import RecoveryAttemptRecord, RecoveryEventRecord
 
 
 def test_read_only_tool_registry_has_ten_tools() -> None:
@@ -87,3 +88,46 @@ def test_rejection_and_duplicate_actions_are_blocked() -> None:
         assert client.post(f"/api/recoveries/{recovery_id}/approve").status_code == 404
         assert client.get("/api/incidents/does-not-exist/impact").status_code == 404
         assert client.post("/api/recoveries/does-not-exist/approve").status_code == 404
+
+
+def test_recovery_ledger_is_persisted_per_payment_and_idempotent() -> None:
+    with TestClient(app) as client:
+        client.post("/api/simulator/reset")
+        incident_id = client.post("/api/simulator/inject/provider_outage").json()["incident_id"]
+        recovery_id = client.post(f"/api/incidents/{incident_id}/recovery").json()["recovery_id"]
+        assert client.post(f"/api/recoveries/{recovery_id}/approve").status_code == 200
+        first = client.post(f"/api/recoveries/{recovery_id}/execute")
+        assert first.status_code == 200
+        summary = first.json()
+        assert summary["recovered_transactions"] >= 0
+        assert summary["recovered_revenue"] >= 0
+
+        attempts = client.get(f"/api/recoveries/{recovery_id}/attempts").json()
+        assert isinstance(attempts, list)
+        assert len(attempts) > 0
+
+        successful = [item for item in attempts if item["status"] == "success"]
+        unique_payment_ids = {item["payment_id"] for item in successful}
+        assert len(unique_payment_ids) == len(successful)
+
+        second = client.post(f"/api/recoveries/{recovery_id}/execute")
+        assert second.status_code == 404
+
+
+def test_recovery_state_machine_rejects_illegal_transitions() -> None:
+    with TestClient(app) as client:
+        client.post("/api/simulator/reset")
+        incident_id = client.post("/api/simulator/inject/provider_outage").json()["incident_id"]
+        recovery_id = client.post(f"/api/incidents/{incident_id}/recovery").json()["recovery_id"]
+
+        assert client.post(f"/api/recoveries/{recovery_id}/execute").status_code == 403
+        assert client.post(f"/api/recoveries/{recovery_id}/approve").status_code == 200
+        assert client.post(f"/api/recoveries/{recovery_id}/approve").status_code == 404
+
+        completed = client.post(f"/api/recoveries/{recovery_id}/execute")
+        assert completed.status_code == 200
+        assert client.post(f"/api/recoveries/{recovery_id}/execute").status_code == 404
+
+        events = client.get(f"/api/recoveries/{recovery_id}/events").json()
+        assert isinstance(events, list)
+        assert len(events) > 0

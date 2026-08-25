@@ -1,4 +1,4 @@
-# FluxPay
+# FluxPay: AI Payment Incident Response and Revenue Recovery
 
 FluxPay is an intelligent payment incident-response, investigation, and revenue-recovery platform. It helps an operations team move from a detected payment degradation to an evidence-backed root-cause analysis, an impact estimate, and a controlled recovery simulation.
 
@@ -8,7 +8,7 @@ The project uses synthetic payment data and a simulated recovery environment. It
 
 FluxPay addresses a common payment-operations problem: an incident can be detected quickly, but understanding its cause, scope, and safest response requires evidence from several systems. FluxPay assembles that evidence into a bounded investigation and keeps recovery actions behind an explicit operator approval step.
 
-The main lifecycle is:
+The complete lifecycle is:
 
 ```text
 Seed
@@ -21,8 +21,11 @@ Seed
   -> Recovery recommendation / policy
   -> Recovery preparation
   -> Approval
-  -> Execution
-  -> Completed simulation
+  -> Human approval
+  -> Bounded retry / fallback
+  -> Stop or escalate
+  -> Payment-level recovery ledger
+  -> Audit trail and replay
 ```
 
 ## Architecture
@@ -75,35 +78,40 @@ All endpoints use the `/api` prefix.
 
 | Area | Endpoints |
 |---|---|
-| Health | `GET /health` |
+| Health | `GET /api/health` |
 | Dashboard | `GET /dashboard/summary` |
 | Simulator | `POST /simulator/reset`, `POST /simulator/inject/{incident_type}` |
 | Incidents | `GET /incidents`, `GET /incidents/{incident_id}` |
-| Incident intelligence | `GET /incidents/{incident_id}/impact`, `/fingerprint`, `/clusters`, `/timeline` |
+| Incident intelligence | `GET /incidents/{incident_id}/impact`, `/fingerprint`, `/clusters`, `/timeline`, `/rca-graph` |
 | Investigations | `POST /investigate/{incident_id}`, `GET /investigations`, `GET /investigations/{investigation_id}` |
 | Investigation detail | `GET /investigations/{investigation_id}/trace`, `/evidence`, `/hypotheses`, `/similar-incidents` |
 | Recovery planning | `GET /incidents/{incident_id}/recovery-recommendation`, `GET /incidents/{incident_id}/recovery-policy` |
-| Recovery lifecycle | `POST /incidents/{incident_id}/recovery`, `POST /recoveries/{recovery_id}/approve`, `/reject`, `/execute` |
+| Recovery lifecycle | `POST /incidents/{incident_id}/recovery`, `GET /incidents/{incident_id}/recovery`, `POST /recoveries/{recovery_id}/approve`, `/reject`, `/execute` |
+| Recovery evidence | `GET /recoveries/{recovery_id}/attempts`, `GET /recoveries/{recovery_id}/events` |
+| Replay | `GET /incidents/{incident_id}/replay`, `/replay/events`, `/replay/{event_id}` |
 | Payments and metrics | `GET /payments`, `GET /metrics/success-rate`, `GET /metrics/failure-rate`, `GET /metrics/latency` |
 | Providers and history | `GET /providers`, `GET /providers/{provider_id}/health`, `GET /historical-incidents` |
 | Knowledge | `GET /knowledge/search?q=...` |
 
 The investigation result includes the selected root cause, confidence, evidence, alternative hypotheses, rejected hypotheses, impact, historical matches, recommended next step, duration, and tool-call count. Investigation traces retain tool inputs, structured outputs, purposes, summaries, and timestamps; hidden chain-of-thought is not persisted.
 
+## Why This Is an AI Agent
+
+FluxPay is an evidence-driven operations agent, not an unrestricted autonomous payment bot. The investigation agent calls bounded read-only tools, gathers payment and provider evidence, compares hypotheses, retrieves historical context, and persists an RCA result. A policy layer converts that result into a recovery recommendation. A separate approval gate is required before simulated money-affecting action, and the recovery engine applies bounded attempts, fallback, stopping rules, and escalation while recording the outcome. Human operators retain control at approval and escalation boundaries.
+
 ## Recovery State Machine
 
 Recovery is a controlled, simulated workflow. Approval does not execute the recovery.
 
 ```text
-pending / not_started
-        |
-      approve
-        v
-approved / not_started
-        |
-      execute
-        v
-completed
+pending / not_started -> approved / not_started -> running
+                                                   |
+                         +-------------------------+----------------------+
+                         |                         |                      |
+                     completed                  blocked               escalated
+                         |                         |                      |
+                         +-------------------------+----------------------+
+                                  terminal; no further execution
 ```
 
 Rejection moves a prepared recovery to `rejected`. The service enforces these guards:
@@ -111,8 +119,43 @@ Rejection moves a prepared recovery to `rejected`. The service enforces these gu
 - Execution before approval is rejected.
 - A rejected recovery cannot be approved.
 - A completed recovery cannot be executed again.
+- Retry attempts are bounded by `max_retries`; with `max_retries=2`, attempt numbers stop at 3 because the initial attempt is number 1.
+- A failed primary path can execute a persisted fallback attempt; a failed fallback escalates and stops automation.
+- `FAILURE_RATE_THRESHOLD` and `RECOVERY_TIME_WINDOW` are evaluated during execution and persist their stop reason and rule.
+- Recovery attempts are keyed by payment and attempt number, and successful ledger rows are deduplicated for recovered economics.
 - A duplicate active recovery preparation for the same incident is rejected.
 - Simulation does not mutate payment rows and is marked `simulation=true`.
+
+Rejection is represented as a cancelled/rejected approval outcome. Completed, blocked, escalated, and cancelled outcomes are terminal for automated execution.
+
+## Measured Recovery and Auditability
+
+`recovered_revenue` is calculated from unique successful payment-level recovery attempts using the simulator's revenue factor:
+
+```text
+recovered_revenue = sum(successful unique payment amounts) * 0.18
+```
+
+It is not copied from `estimated_recoverable_revenue`, and failed attempts contribute zero recovered amount. The values are synthetic simulation metrics; no provider or customer payment is mutated.
+
+Recovery attempts are persisted in `recovery_attempts`. Recovery events are persisted in `recovery_events`, including `RECOVERY_PREPARED`, `RECOVERY_APPROVED`, `ATTEMPT_STARTED`, `ATTEMPT_FAILED`, `RETRY_TRIGGERED`, `FALLBACK_TRIGGERED`, `PAYMENT_RECOVERED`, `STOPPING_RULE_TRIGGERED`, `RECOVERY_ESCALATED`, `RECOVERY_EXECUTED`, and `RECOVERY_REJECTED`. The replay API consumes these persisted recovery events alongside investigation state.
+
+`GET /api/incidents/{incident_id}/recovery` selects the latest persisted recovery deterministically by timestamp and recovery ID. The dashboard uses that ID to reload recovery metrics, attempts, and events after an incident is selected or the page is refreshed.
+
+## Razorpay AI Revenue Recovery Mapping
+
+| Requirement | Actual implementation |
+|---|---|
+| Measured money recovered across a batch | `RecoveryAttemptRecord` stores each payment-level result. Successful unique payment amounts are summed and multiplied by the simulator's 0.18 factor; estimated recoverable values are not used as recovered revenue. |
+| Compliant escalation | Primary attempts can use bounded retries, then a persisted fallback attempt. A failed fallback or exhausted retry budget records the rule and reason, transitions to `escalated`, and blocks further automated execution. |
+| Enforced stopping rules | `MAX_RETRIES`, `FAILURE_RATE_THRESHOLD`, `RECOVERY_TIME_WINDOW`, terminal-state checks, and duplicate-payment protection are enforced by execution logic and recorded in `recovery_events`. |
+| Audit trail | Execution, payment attempts, recovery events, investigation traces, RCA results, and replay data are persisted and linked by incident/recovery identifiers. |
+
+## Data Flow, RCA, and Replay
+
+`Incident` identifies the detected operational event and relates to failed `Payment` rows. `Investigation` stores the agent result, evidence, hypotheses, historical matches, and trace. `RecoveryExecutionRecord` stores the lifecycle and serialized outcome. It relates to payment-level `RecoveryAttemptRecord` rows and chronological `RecoveryEventRecord` rows. The dashboard renders these persisted backend resources.
+
+The Explainable RCA graph is generated from the persisted investigation result as Incident -> Evidence -> Hypotheses -> Root Cause -> Recovery Action. Live Incident Replay combines persisted incident and investigation state with persisted recovery events, including preparation, approval, attempts, retries, fallback, stopping, escalation, and completion where present.
 
 ## Simulator Scenarios
 
@@ -148,7 +191,18 @@ The four detector/data-limited scenarios are not broken API endpoints. Their sce
 11. Click **Prepare recovery** and confirm `pending / not_started`.
 12. Click **Approve recovery** and confirm `approved / not_started`.
 13. Click **Execute simulation**.
-14. View the completed recovery result.
+14. View measured recovered revenue, recovered transactions, retry/fallback controls, stopping state, and persisted audit events.
+15. Open Live Incident Replay and inspect the lifecycle.
+
+To demonstrate a controlled failure path, execute the recovery endpoint with a simulation policy such as `{"max_retries": 0, "fallback_strategy": "alternative_method", "recovery_window_seconds": 999999999, "primary_outcomes": ["failure"], "fallback_outcomes": ["failure"]}`. The extended window covers the synthetic incident timestamps; the persisted failed attempts, fallback event, stopping event, and escalation state show why automation stopped. This is simulation input, not a real provider call.
+
+## Five-Minute Pitch
+
+1. **0:00-0:45:** Explain payment failure batches and the synthetic incident simulator.
+2. **0:45-1:45:** Inject a provider outage, select the incident, and show impact plus revenue at risk.
+3. **1:45-2:45:** Run the investigation and show evidence, hypotheses, confidence, and the Explainable RCA graph.
+4. **2:45-4:15:** Prepare, approve, and execute recovery; show measured recovered revenue, payment attempts, retry/fallback controls, and terminal outcome.
+5. **4:15-5:00:** Open persisted audit events and Live Incident Replay, then state the synthetic-simulation limitations clearly.
 
 ## Running Locally
 
@@ -192,14 +246,12 @@ Open `http://localhost:5173`. The dashboard uses `VITE_API_BASE_URL` when provid
 
 These are the final verified audit results for the locked implementation:
 
-- Pytest: **18 passed**.
+- Pytest: **56 passed** in the latest recorded full regression run.
 - Benchmark: **20/20 root-cause accuracy**.
 - Benchmark: **20/20 recovery recommendation accuracy**.
 - MCP: **10 read-only tools registered**.
 - Frontend production build: **passed**.
-- Browser smoke test: **passed**.
-- Browser console errors: **0**.
-- Failed browser requests: **0**.
+- Browser smoke test: **passed** against the local stack, including incident selection rehydration, completed recovery reload, replay, and the escalated primary/fallback failure path.
 - Final clean database: **5,000 payments, 30 historical incidents, 0 active incidents, 0 investigations, 0 recoveries**.
 
 The measured benchmark can be run with:
@@ -208,7 +260,7 @@ The measured benchmark can be run with:
 python -m evaluation.runner
 ```
 
-The machine-readable report is written to `evaluation/report.json`. MCP registration can be inspected with:
+The runner prints a machine-readable JSON report to stdout; no generated benchmark report is committed. MCP registration can be inspected with:
 
 ```bash
 python -m mcp_server
@@ -233,6 +285,8 @@ The following defects were identified and fixed before the final documentation p
 - Vite reports an existing chunk-size warning for the production bundle; the build still passes.
 - No lint or typecheck script is configured in the dashboard package.
 - The system is synthetic and local; it is not a deployed production payment service.
+- No real customer money moves and no real payment provider is called or mutated. Recovery outcomes are simulated against persisted synthetic payment records. A production implementation would require provider adapters, provider-side idempotency, live authorization handling, and deployment controls.
+- Browser and 390px viewport validation were not executablely performed in the final documentation pass.
 
 ## Design and Engineering Decisions
 
@@ -247,4 +301,4 @@ The following defects were identified and fixed before the final documentation p
 
 ## Submission-Ready Summary
 
-FluxPay demonstrates an end-to-end payment incident workflow: it seeds deterministic synthetic traffic, detects or injects incidents, investigates them through read-only evidence tools, produces RCA with hypotheses and historical comparisons, quantifies impact, recommends constrained recovery, and requires explicit approval before a sandbox execution. Its FastAPI, database, detection, investigation, recovery, MCP, evaluation, and React/Vite layers are connected through persisted resource lifecycles. The final audit verified 18 passing tests, 20/20 RCA accuracy, 20/20 recovery recommendation accuracy, 10 registered MCP tools, a passing frontend build, and a browser flow with zero console errors and failed requests. Four detector/data-limited scenarios and the intentional negative control remain documented limitations; the primary provider-outage demonstration is verified and submission-ready.
+FluxPay demonstrates an end-to-end payment incident workflow: it seeds deterministic synthetic traffic, detects or injects incidents, investigates them through read-only evidence tools, produces RCA with hypotheses and historical comparisons, quantifies impact, recommends constrained recovery, and requires explicit approval before a sandbox execution. Its FastAPI, database, detection, investigation, recovery, MCP, evaluation, and React/Vite layers are connected through persisted resource lifecycles. The final recorded audit verified 56 passing tests, 20/20 RCA accuracy, 20/20 recovery recommendation accuracy, 10 registered MCP tools, and a passing frontend build. Browser E2E and 390px viewport results are intentionally not claimed for this environment.

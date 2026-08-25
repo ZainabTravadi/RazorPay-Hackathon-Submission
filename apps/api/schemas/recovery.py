@@ -43,12 +43,22 @@ class PolicyDecision(BaseModel):
     blocked_actions: list[str]
 
 
+class RecoveryExecutionRequest(BaseModel):
+    max_retries: int = Field(default=0, ge=0, le=10)
+    fallback_strategy: str | None = "provider_failover"
+    failure_rate_threshold: float = Field(default=1.0, ge=0, le=1)
+    recovery_window_seconds: int = Field(default=86400, ge=0)
+    primary_outcomes: list[Literal["success", "failure"]] | None = None
+    fallback_outcomes: list[Literal["success", "failure"]] | None = None
+
+
 class RecoveryExecution(BaseModel):
     recovery_id: str
     incident_id: str
     strategy: str
+    status: Literal["pending", "approved", "running", "retrying", "escalated", "blocked", "completed", "failed", "cancelled"] = "pending"
     approval_status: Literal["pending", "approved", "rejected", "cancelled"]
-    execution_status: Literal["not_started", "completed", "blocked", "failed"]
+    execution_status: Literal["not_started", "running", "retrying", "escalated", "completed", "blocked", "failed", "cancelled"]
     before_metrics: dict[str, Any]
     after_metrics: dict[str, Any] | None = None
     recovered_transactions: int = 0
@@ -56,4 +66,36 @@ class RecoveryExecution(BaseModel):
     recovery_rate: float = 0
     simulated_latency_impact_ms: float = 0
     simulation: bool = True
+    max_retries: int = 0
+    fallback_strategy: str | None = "provider_failover"
+    failure_rate_threshold: float = 1.0
+    recovery_window_seconds: int = 86400
+    stop_reason: str | None = None
+    triggering_rule: str | None = None
+    timestamp: datetime
+
+
+class RecoveryAttempt(BaseModel):
+    attempt_id: str
+    recovery_id: str
+    incident_id: str
+    payment_id: str
+    attempt_number: int
+    strategy: str
+    status: Literal["success", "failed"]
+    success: bool
+    amount: float
+    recovered_amount: float = 0.0
+    failure_reason: str | None = None
+    timestamp: datetime
+
+
+class RecoveryEvent(BaseModel):
+    event_id: str
+    recovery_id: str
+    incident_id: str
+    payment_id: str | None = None
+    event_type: str
+    reason: str | None = None
+    metadata_json: dict[str, Any] | None = None
     timestamp: datetime

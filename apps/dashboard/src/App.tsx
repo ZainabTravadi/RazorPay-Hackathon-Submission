@@ -56,7 +56,7 @@ type RecoveryExecution = {
   incident_id: string
   strategy: string
   approval_status: 'pending' | 'approved' | 'rejected' | 'cancelled'
-  execution_status: 'not_started' | 'completed' | 'blocked' | 'failed'
+  execution_status: 'not_started' | 'retrying' | 'escalated' | 'completed' | 'blocked' | 'failed' | 'cancelled'
   before_metrics: Record<string, any>
   after_metrics?: Record<string, any> | null
   recovered_transactions: number
@@ -64,6 +64,34 @@ type RecoveryExecution = {
   recovery_rate: number
   simulated_latency_impact_ms: number
   simulation: boolean
+  max_retries: number
+  fallback_strategy: string | null
+  failure_rate_threshold: number
+  recovery_window_seconds: number
+  stop_reason: string | null
+  triggering_rule: string | null
+  timestamp: string
+}
+
+type RecoveryAttempt = {
+  attempt_id: string
+  payment_id: string
+  attempt_number: number
+  strategy: string
+  status: 'success' | 'failed'
+  success: boolean
+  amount: number
+  recovered_amount: number
+  failure_reason: string | null
+  timestamp: string
+}
+
+type RecoveryEvent = {
+  event_id: string
+  payment_id: string | null
+  event_type: string
+  reason: string | null
+  metadata_json: Record<string, any>
   timestamp: string
 }
 
@@ -94,6 +122,15 @@ async function api(path: string, options?: RequestInit) {
   const body = await response.json().catch(() => ({}))
   if (!response.ok) throw new Error(body.detail ?? `Request failed (${response.status})`)
   return body
+}
+
+async function loadPersistedRecovery(incidentId: string): Promise<RecoveryExecution | null> {
+  try {
+    return await api(`/incidents/${incidentId}/recovery`)
+  } catch (reason: any) {
+    if (reason.message === 'Recovery not found') return null
+    throw reason
+  }
 }
 
 function formatLabel(value: string) {
@@ -207,6 +244,8 @@ export default function App() {
   const [recommendation, setRecommendation] = useState<any>(null)
   const [policy, setPolicy] = useState<any>(null)
   const [recovery, setRecovery] = useState<RecoveryExecution | null>(null)
+  const [recoveryAttempts, setRecoveryAttempts] = useState<RecoveryAttempt[]>([])
+  const [recoveryEvents, setRecoveryEvents] = useState<RecoveryEvent[]>([])
   const [replayTargetId, setReplayTargetId] = useState<string | null>(null)
   const [scenario, setScenario] = useState<(typeof scenarios)[number]['value']>(scenarios[0].value)
   const [busy, setBusy] = useState<'inject' | 'reset' | 'prepare' | 'approve' | 'execute' | ''>('')
@@ -292,6 +331,8 @@ export default function App() {
     setRecommendation(null)
     setPolicy(null)
     setRecovery(null)
+    setRecoveryAttempts([])
+    setRecoveryEvents([])
     setInvestigating(false)
 
     try {
@@ -309,6 +350,13 @@ export default function App() {
         .sort((a: any, b: any) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())[0]
 
       const nextInvestigation = existing ? await api(`/investigations/${existing.investigation_id}`) : null
+      const nextRecovery = await loadPersistedRecovery(nextIncident.incident_id)
+      const [nextAttempts, nextEvents] = nextRecovery
+        ? await Promise.all([
+            api(`/recoveries/${nextRecovery.recovery_id}/attempts`),
+            api(`/recoveries/${nextRecovery.recovery_id}/events`),
+          ])
+        : [[], []]
 
       setImpact(nextImpact)
       setTimeline(nextTimeline)
@@ -316,6 +364,9 @@ export default function App() {
       setRecommendation(nextRecommendation)
       setPolicy(nextPolicy)
       setInvestigation(nextInvestigation)
+      setRecovery(nextRecovery)
+      setRecoveryAttempts(nextAttempts)
+      setRecoveryEvents(nextEvents)
     } catch (reason: any) {
       setError(reason.message)
     } finally {
@@ -371,6 +422,8 @@ export default function App() {
       setRecommendation(null)
       setPolicy(null)
       setRecovery(null)
+      setRecoveryAttempts([])
+      setRecoveryEvents([])
       showToast('Simulator reset', 'success')
       await refreshOverview()
     } catch (reason: any) {
@@ -402,6 +455,12 @@ export default function App() {
     try {
       const nextRecovery = await api(path, { method: 'POST' })
       setRecovery(nextRecovery)
+      const [nextAttempts, nextEvents] = await Promise.all([
+        api(`/recoveries/${nextRecovery.recovery_id}/attempts`),
+        api(`/recoveries/${nextRecovery.recovery_id}/events`),
+      ])
+      setRecoveryAttempts(nextAttempts)
+      setRecoveryEvents(nextEvents)
       showToast(
         stage === 'execute'
           ? 'Recovery completed'
@@ -1017,6 +1076,24 @@ export default function App() {
                         <strong>{(impact?.affected_payment_methods ?? [selectedIncident.primary_payment_method ?? 'Mixed']).join(', ')}</strong>
                       </div>
                     </div>
+
+                    {recovery && (
+                      <div className="recovery-outcome" aria-label="Recovery outcome">
+                        <div className="recovery-outcome-head">
+                          <div>
+                            <p className="section-kicker">Measured outcome</p>
+                            <strong>Money recovered from the payment ledger</strong>
+                          </div>
+                          <StatusChip value={recovery.execution_status} />
+                        </div>
+                        <div className="recovery-outcome-grid">
+                          <MetricPill label="Revenue recovered" value={formatMoney(recovery.recovered_revenue)} />
+                          <MetricPill label="Recovery rate" value={formatPercent(recovery.recovery_rate, 1)} />
+                          <MetricPill label="Transactions recovered" value={recovery.recovered_transactions.toLocaleString()} />
+                          <MetricPill label="Transactions at risk" value={(impact?.failed_transactions ?? selectedIncident.affected_transactions).toLocaleString()} />
+                        </div>
+                      </div>
+                    )}
                   </section>
 
                   <section className="section-card recovery-card">
@@ -1093,6 +1170,69 @@ export default function App() {
                           <StatusChip value={recovery.execution_status} />
                         </div>
                       </div>
+                    )}
+
+                    {recovery && (
+                      <div className="recovery-controls" aria-label="Recovery controls">
+                        <div className="recovery-control-head">
+                          <div>
+                            <p className="section-kicker">Stopping controls</p>
+                            <strong>Automation boundary</strong>
+                          </div>
+                          <span>{recoveryAttempts.length} persisted attempts</span>
+                        </div>
+                        <div className="recovery-control-grid">
+                          <ControlStat label="Maximum retries" value={String(recovery.max_retries)} />
+                          <ControlStat label="Failure threshold" value={formatPercent(recovery.failure_rate_threshold)} />
+                          <ControlStat label="Time window" value={`${Math.round(recovery.recovery_window_seconds / 60)}m`} />
+                          <ControlStat label="Terminal state" value={formatLabel(recovery.execution_status)} />
+                        </div>
+                        {recovery.fallback_strategy && <p className="control-note">Fallback: {formatLabel(recovery.fallback_strategy)}</p>}
+                        {recovery.stop_reason && (
+                          <div className="stop-reason">
+                            <strong>{formatLabel(recovery.triggering_rule ?? 'Stopping rule')}</strong>
+                            <span>{recovery.stop_reason}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {recovery && (
+                      <details className="recovery-audit" open>
+                        <summary>
+                          <div>
+                            <p className="section-kicker">Persisted audit trail</p>
+                            <strong>What did the agent actually do?</strong>
+                          </div>
+                          <span>{recoveryEvents.length} events</span>
+                        </summary>
+                        {recoveryEvents.length === 0 ? (
+                          <div className="empty-inline"><strong>No recovery events recorded yet.</strong><p>Events will appear after the recovery action runs.</p></div>
+                        ) : (
+                          <div className="recovery-event-list">
+                            {recoveryEvents.map((event) => (
+                              <article key={event.event_id} className="recovery-event-row">
+                                <div className="recovery-event-marker" />
+                                <div>
+                                  <div className="recovery-event-topline">
+                                    <strong>{formatLabel(event.event_type)}</strong>
+                                    <time>{formatDateTime(event.timestamp)}</time>
+                                  </div>
+                                  <span>{event.payment_id ? `Payment ${event.payment_id}` : 'Recovery-level event'}</span>
+                                  {event.reason && <p>{event.reason}</p>}
+                                  {(event.metadata_json?.attempt_number || event.metadata_json?.strategy || event.metadata_json?.rule) && (
+                                    <small>
+                                      {event.metadata_json.attempt_number ? `Attempt ${event.metadata_json.attempt_number}` : ''}
+                                      {event.metadata_json.strategy ? ` · ${formatLabel(event.metadata_json.strategy)}` : ''}
+                                      {event.metadata_json.rule ? ` · Rule: ${formatLabel(event.metadata_json.rule)}` : ''}
+                                    </small>
+                                  )}
+                                </div>
+                              </article>
+                            ))}
+                          </div>
+                        )}
+                      </details>
                     )}
 
                     {recovery?.execution_status === 'completed' && (
@@ -1272,10 +1412,10 @@ function MetricPill({
 }: {
   label: string
   value: string | number
-  animated: boolean
+  animated?: boolean
 }) {
   const numeric = typeof value === 'number' ? value : Number.parseFloat(String(value).replace(/[^0-9.-]/g, '')) || 0
-  const animatedValue = useAnimatedNumber(numeric, animated)
+  const animatedValue = useAnimatedNumber(numeric, Boolean(animated))
   const display = typeof value === 'number' ? Math.round(animatedValue).toLocaleString('en-IN') : value
 
   return (
@@ -1286,7 +1426,18 @@ function MetricPill({
   )
 }
 
+function ControlStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="control-stat">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  )
+}
+
 function RecoveryLadder({ recovery, policy }: { recovery: RecoveryExecution | null; policy: any }) {
+  const terminal = recovery?.execution_status === 'completed' || recovery?.execution_status === 'blocked' || recovery?.execution_status === 'escalated' || recovery?.execution_status === 'failed' || recovery?.execution_status === 'cancelled'
+  const terminalLabel = recovery?.execution_status === 'completed' ? 'Completed' : recovery ? 'Terminal outcome' : 'Completed'
   const steps = [
     {
       label: 'Prepare',
@@ -1315,9 +1466,9 @@ function RecoveryLadder({ recovery, policy }: { recovery: RecoveryExecution | nu
       status: recovery?.execution_status === 'completed' ? 'complete' : recovery?.approval_status === 'approved' ? 'active' : 'pending',
     },
     {
-      label: 'Completed',
-      note: recovery?.execution_status === 'completed' ? 'Finished' : 'Awaiting execution',
-      status: recovery?.execution_status === 'completed' ? 'complete' : 'pending',
+      label: terminalLabel,
+      note: terminal ? formatLabel(recovery?.execution_status ?? 'completed') : 'Awaiting execution',
+      status: terminal ? 'complete' : 'pending',
     },
   ]
 

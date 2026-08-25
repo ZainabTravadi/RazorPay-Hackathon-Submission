@@ -7,7 +7,7 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from apps.api.services.incident_service import persist_incident, seed_active_incident
-from database.models import Incident, Investigation, Payment, RecoveryExecutionRecord
+from database.models import Incident, Investigation, Payment, RecoveryAttemptRecord, RecoveryEventRecord, RecoveryExecutionRecord
 from database.session import get_db
 from data.generator.generate import generate_payments
 from ml.anomaly.detector import detect_incidents
@@ -17,9 +17,11 @@ router = APIRouter(prefix="/api")
 
 @router.post("/simulator/reset")
 def reset_simulator(db: Session = Depends(get_db)) -> dict:
+    db.execute(delete(RecoveryEventRecord))
+    db.execute(delete(RecoveryAttemptRecord))
+    db.execute(delete(RecoveryExecutionRecord))
     db.execute(delete(Incident))
     db.execute(delete(Investigation))
-    db.execute(delete(RecoveryExecutionRecord))
     db.query(Payment).filter(Payment.payment_id.like("INC-%")).delete(synchronize_session=False)
     db.commit()
     return {"status": "reset", "synthetic": True}

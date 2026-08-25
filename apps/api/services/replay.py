@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -20,7 +21,7 @@ from apps.api.services.investigation_tools import (
 )
 from apps.api.services.investigator import evidence_confidence
 from apps.api.services.recovery import calculate_impact, evaluate_policy, recommend_recovery
-from database.models import HistoricalIncident, Incident, Investigation, RecoveryExecutionRecord
+from database.models import HistoricalIncident, Incident, Investigation, RecoveryEventRecord, RecoveryExecutionRecord
 
 
 @dataclass(slots=True)
@@ -35,6 +36,7 @@ class _ReplaySubject:
     recommendation: dict[str, Any]
     policy: dict[str, Any]
     projection: dict[str, Any]
+    persisted_recovery_events: list[RecoveryEventRecord]
 
 
 def _normalize_datetime(value: datetime | None) -> datetime:
@@ -329,6 +331,13 @@ def _subject_for_incident(db: Session, incident_id: str) -> _ReplaySubject:
             except Exception:
                 investigation_result = None
         projected = investigation_result or InvestigationResult.model_validate(_project_investigation_live(db, incident))
+        persisted_recovery_events = []
+        if recovery_row:
+            persisted_recovery_events = db.scalars(
+                select(RecoveryEventRecord)
+                .where(RecoveryEventRecord.recovery_id == recovery_row.recovery_id)
+                .order_by(RecoveryEventRecord.timestamp)
+            ).all()
         return _ReplaySubject(
             incident=_build_incident_summary(incident),
             incident_row=incident,
@@ -340,6 +349,7 @@ def _subject_for_incident(db: Session, incident_id: str) -> _ReplaySubject:
             recommendation=recommendation,
             policy=policy,
             projection=projected.model_dump(mode="json"),
+            persisted_recovery_events=persisted_recovery_events,
         )
 
     summary = _build_historical_summary(historical)  # type: ignore[arg-type]
@@ -363,6 +373,7 @@ def _subject_for_incident(db: Session, incident_id: str) -> _ReplaySubject:
         recommendation=recommendation,
         policy=policy,
         projection=_project_investigation_historical(historical, summary),
+        persisted_recovery_events=[],
     )
 
 
@@ -794,6 +805,32 @@ def _build_timeline(subject: _ReplaySubject) -> list[ReplayEvent]:
                     severity="info",
                     recovery_id=recovery_record.recovery_id,
                     metadata={"approval_status": recovery_record.approval_status},
+                    state=state,
+                )
+            )
+
+        replayable_recovery_events = {
+            "ATTEMPT_STARTED", "ATTEMPT_FAILED", "RETRY_TRIGGERED", "FALLBACK_TRIGGERED",
+            "STOPPING_RULE_TRIGGERED", "RECOVERY_ESCALATED",
+        }
+        for persisted in subject.persisted_recovery_events:
+            if persisted.event_type not in replayable_recovery_events:
+                continue
+            index += 1
+            metadata = json.loads(persisted.metadata_json or "{}")
+            state.update({"execution_status": recovery_record.execution_status, "phase": "recovery"})
+            events.append(
+                _event(
+                    subject=subject,
+                    index=index,
+                    event_type=persisted.event_type,
+                    timestamp=_normalize_datetime(persisted.timestamp),
+                    title=persisted.event_type.replace("_", " ").title(),
+                    description=persisted.reason or "Recovery execution event persisted by the backend.",
+                    phase="recovery",
+                    severity="critical" if persisted.event_type in {"STOPPING_RULE_TRIGGERED", "RECOVERY_ESCALATED"} else "info",
+                    recovery_id=recovery_record.recovery_id,
+                    metadata={"payment_id": persisted.payment_id, **metadata},
                     state=state,
                 )
             )
