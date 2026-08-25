@@ -3,10 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from apps.api.schemas.investigation import InvestigationResult
 from apps.api.services.incident_service import list_active_incidents, get_incident_by_id
 from apps.api.services.investigation_tools import get_failure_clusters, get_transaction_timeline
+from database.models import Investigation
 from database.session import get_db
 
 router = APIRouter(prefix="/api")
@@ -86,3 +89,56 @@ def incident_timeline(incident_id: str, db: Session = Depends(get_db)) -> list[d
         return get_transaction_timeline(db, incident_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _latest_investigation_result(db: Session, incident_id: str) -> InvestigationResult | None:
+    row = db.scalars(
+        select(Investigation)
+        .where(Investigation.incident_id == incident_id)
+        .order_by(Investigation.started_at.desc())
+    ).first()
+    if row is None:
+        return None
+    return InvestigationResult.model_validate_json(row.result_json)
+
+
+def _build_rca_graph(incident, result: InvestigationResult) -> dict:
+    nodes = [{"id": incident.incident_id, "label": incident.description or incident.incident_id, "type": "incident"}]
+    edges = []
+
+    evidence_nodes = []
+    for index, evidence in enumerate(result.evidence, start=1):
+        node_id = f"{incident.incident_id}:evidence:{index}"
+        nodes.append({"id": node_id, "label": evidence.description, "type": "evidence"})
+        edges.append({"source": incident.incident_id, "target": node_id, "relationship": "observed"})
+        evidence_nodes.append(node_id)
+
+    hypothesis_nodes = []
+    for index, hypothesis in enumerate(result.alternative_hypotheses, start=1):
+        node_id = f"{incident.incident_id}:hypothesis:{index}"
+        nodes.append({"id": node_id, "label": hypothesis.hypothesis, "type": "hypothesis"})
+        hypothesis_nodes.append(node_id)
+        for evidence_node in evidence_nodes:
+            edges.append({"source": evidence_node, "target": node_id, "relationship": "supports"})
+
+    root_cause_id = f"{incident.incident_id}:root-cause"
+    nodes.append({"id": root_cause_id, "label": result.root_cause, "type": "root_cause"})
+    for hypothesis_node in hypothesis_nodes:
+        edges.append({"source": hypothesis_node, "target": root_cause_id, "relationship": "converges_on"})
+
+    action_id = f"{incident.incident_id}:recovery-action"
+    nodes.append({"id": action_id, "label": result.recommended_next_step, "type": "recovery_action"})
+    edges.append({"source": root_cause_id, "target": action_id, "relationship": "leads_to"})
+    return {"nodes": nodes, "edges": edges}
+
+
+@router.get("/incidents/{incident_id}/rca-graph")
+def incident_rca_graph(incident_id: str, db: Session = Depends(get_db)) -> dict:
+    incident = get_incident_by_id(db, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    result = _latest_investigation_result(db, incident_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Investigation not found")
+    graph = _build_rca_graph(incident, result)
+    return {"incident_id": incident_id, **graph}

@@ -37,6 +37,25 @@ def test_mock_investigation_persists_trace() -> None:
     assert len(client.get(f"/api/investigations/{payload['investigation_id']}/trace").json()) == 8
 
 
+def test_rca_graph_exposes_existing_reasoning_chain() -> None:
+    with TestClient(app) as client:
+        client.post("/api/simulator/reset")
+        incident_id = client.post("/api/simulator/inject/provider_outage").json()["incident_id"]
+        assert client.post(f"/api/investigate/{incident_id}").status_code == 200
+
+        response = client.get(f"/api/incidents/{incident_id}/rca-graph")
+        assert response.status_code == 200
+        payload = response.json()
+
+        assert payload["incident_id"] == incident_id
+        assert isinstance(payload["nodes"], list)
+        assert isinstance(payload["edges"], list)
+        assert len(payload["nodes"]) > 0
+        assert len(payload["edges"]) > 0
+        assert all({"id", "label", "type"} <= set(node) for node in payload["nodes"])
+        assert all({"source", "target", "relationship"} <= set(edge) for edge in payload["edges"])
+
+
 def test_recovery_requires_approval_and_does_not_mutate_payments() -> None:
     with TestClient(app) as client:
         client.post("/api/simulator/reset")
