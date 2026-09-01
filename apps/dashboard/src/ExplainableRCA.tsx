@@ -97,7 +97,11 @@ export default function ExplainableRCA({
           ? Array.from(
               new Set(
                 edges
-                  .filter((edge) => stageNodes.some((node) => node.id === edge.source) && nextStageNodes.some((node) => node.id === edge.target))
+                  .filter(
+                    (edge) =>
+                      stageNodes.some((node) => node.id === edge.source) &&
+                      nextStageNodes.some((node) => node.id === edge.target),
+                  )
                   .map((edge) => edge.relationship),
               ),
             )
@@ -110,6 +114,21 @@ export default function ExplainableRCA({
       }
     })
   }, [graph])
+
+  const graphSummary = useMemo(() => {
+    const nodes = graph?.nodes ?? []
+    const edges = graph?.edges ?? []
+    const strongestLink =
+      stageGroups.flatMap((stage) => stage.relationships).sort((left, right) => left.localeCompare(right))[0] ??
+      'relationships'
+
+    return {
+      stageCount: stageGroups.filter((stage) => stage.nodes.length > 0).length,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      strongestLink: formatLabel(strongestLink),
+    }
+  }, [graph, stageGroups])
 
   if (loading) {
     return (
@@ -170,6 +189,23 @@ export default function ExplainableRCA({
         <h3>Why did this happen?</h3>
       </div>
 
+      <div className="explainable-rca-summary" aria-label="RCA overview">
+        <div className="explainable-rca-summary-item">
+          <span>Active stages</span>
+          <strong>{graphSummary.stageCount}/5</strong>
+        </div>
+        <div className="explainable-rca-summary-item">
+          <span>Nodes mapped</span>
+          <strong>{graphSummary.nodeCount}</strong>
+        </div>
+        <div className="explainable-rca-summary-item">
+          <span>Primary link</span>
+          <strong>
+            {graphSummary.strongestLink} <small>({graphSummary.edgeCount} links)</small>
+          </strong>
+        </div>
+      </div>
+
       <div className="explainable-rca-flow">
         {stageGroups.map((stage, index) => (
           <Fragment key={stage.key}>
@@ -223,8 +259,10 @@ function Connector({ relationships }: { relationships: string[] }) {
   return (
     <div className="explainable-rca-connector" aria-hidden="true">
       <div className="explainable-rca-connector-line" />
-      <div className="explainable-rca-connector-arrow">↓</div>
-      <div className="explainable-rca-connector-label">{relationships.length > 0 ? relationships.map(formatLabel).join(' · ') : 'Relates to'}</div>
+      <div className="explainable-rca-connector-arrow">to</div>
+      <div className="explainable-rca-connector-label">
+        {relationships.length > 0 ? relationships.map(formatLabel).join(' / ') : 'Relates to'}
+      </div>
     </div>
   )
 }

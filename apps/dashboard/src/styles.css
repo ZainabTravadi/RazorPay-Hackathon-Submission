@@ -719,7 +719,7 @@ button:disabled {
 
 .workspace-header {
   display: grid;
-  grid-template-columns: minmax(0, 1.3fr) minmax(270px, 0.64fr);
+  grid-template-columns: minmax(0, 1.22fr) minmax(270px, 0.78fr);
   gap: 18px;
   padding-bottom: 18px;
   border-bottom: 1px solid rgba(231, 224, 214, 0.92);
@@ -956,7 +956,7 @@ button:disabled {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.72fr);
+  grid-template-columns: minmax(0, 1.18fr) minmax(320px, 0.82fr);
   gap: 18px;
   align-items: start;
 }
@@ -1266,12 +1266,50 @@ button:disabled {
 
 .explainable-rca-card {
   display: grid;
-  gap: 16px;
+  gap: 18px;
 }
 
 .explainable-rca-loading,
 .explainable-rca-flow {
   min-width: 0;
+}
+
+.explainable-rca-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.explainable-rca-summary-item {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  border: 1px solid rgba(231, 224, 214, 0.92);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(250, 247, 242, 0.98) 100%);
+  box-shadow: var(--shadow-sm);
+}
+
+.explainable-rca-summary-item span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.explainable-rca-summary-item strong {
+  color: #111827;
+  font-size: 16px;
+  line-height: 1.2;
+  letter-spacing: -0.04em;
+}
+
+.explainable-rca-summary-item strong small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .explainable-rca-loading {
@@ -1291,17 +1329,19 @@ button:disabled {
 .explainable-rca-flow {
   display: flex;
   align-items: stretch;
-  gap: 10px;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
 }
 
 .explainable-rca-stage {
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 1 1 176px;
+  min-width: 176px;
   display: grid;
-  gap: 10px;
-  padding: 14px;
+  gap: 12px;
+  padding: 16px;
   border: 1px solid rgba(231, 224, 214, 0.92);
-  border-radius: 18px;
+  border-radius: 20px;
   background: linear-gradient(180deg, #fff 0%, #fcfaf7 100%);
   box-shadow: var(--shadow-sm);
 }
@@ -1338,7 +1378,7 @@ button:disabled {
 
 .explainable-rca-stage-head span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1348,9 +1388,9 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 26px;
-  height: 26px;
-  padding: 0 8px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 9px;
   border-radius: 999px;
   background: #f2eee8;
   color: #374151;
@@ -1366,7 +1406,7 @@ button:disabled {
 
 .explainable-rca-node-list {
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .explainable-rca-node {
@@ -1374,9 +1414,9 @@ button:disabled {
   grid-template-columns: 10px minmax(0, 1fr);
   gap: 10px;
   align-items: start;
-  padding: 11px 12px;
+  padding: 12px 13px;
   border: 1px solid rgba(231, 224, 214, 0.9);
-  border-radius: 14px;
+  border-radius: 16px;
   background: #fff;
   min-width: 0;
 }
@@ -1396,7 +1436,7 @@ button:disabled {
 .explainable-rca-node-copy strong {
   display: block;
   color: #111827;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.45;
   letter-spacing: -0.03em;
   overflow: hidden;
@@ -1409,7 +1449,7 @@ button:disabled {
   display: block;
   margin-top: 4px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -1447,7 +1487,7 @@ button:disabled {
 }
 
 .explainable-rca-connector {
-  flex: 0 0 58px;
+  flex: 0 0 64px;
   display: grid;
   justify-items: center;
   align-content: center;
@@ -1458,7 +1498,7 @@ button:disabled {
 
 .explainable-rca-connector-line {
   width: 1px;
-  height: 44px;
+  height: 42px;
   border-radius: 999px;
   background: linear-gradient(180deg, rgba(231, 224, 214, 0.2), rgba(231, 224, 214, 1), rgba(231, 224, 214, 0.2));
 }
@@ -1466,17 +1506,19 @@ button:disabled {
 .explainable-rca-connector-arrow {
   display: grid;
   place-items: center;
-  width: 28px;
-  height: 28px;
+  width: 30px;
+  height: 30px;
   border-radius: 999px;
   background: #f4f1ea;
   color: var(--accent);
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .explainable-rca-connector-label {
-  max-width: 64px;
+  max-width: 72px;
   color: var(--muted);
   font-size: 10px;
   font-weight: 800;
@@ -2908,8 +2950,13 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
+  .explainable-rca-summary {
+    grid-template-columns: 1fr;
+  }
+
   .explainable-rca-flow {
     flex-direction: column;
+    overflow: visible;
   }
 
   .explainable-rca-connector {
