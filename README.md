@@ -196,14 +196,6 @@ The four detector/data-limited scenarios are not broken API endpoints. Their sce
 
 To demonstrate a controlled failure path, execute the recovery endpoint with a simulation policy such as `{"max_retries": 0, "fallback_strategy": "alternative_method", "recovery_window_seconds": 999999999, "primary_outcomes": ["failure"], "fallback_outcomes": ["failure"]}`. The extended window covers the synthetic incident timestamps; the persisted failed attempts, fallback event, stopping event, and escalation state show why automation stopped. This is simulation input, not a real provider call.
 
-## Five-Minute Pitch
-
-1. **0:00-0:45:** Explain payment failure batches and the synthetic incident simulator.
-2. **0:45-1:45:** Inject a provider outage, select the incident, and show impact plus revenue at risk.
-3. **1:45-2:45:** Run the investigation and show evidence, hypotheses, confidence, and the Explainable RCA graph.
-4. **2:45-4:15:** Prepare, approve, and execute recovery; show measured recovered revenue, payment attempts, retry/fallback controls, and terminal outcome.
-5. **4:15-5:00:** Open persisted audit events and Live Incident Replay, then state the synthetic-simulation limitations clearly.
-
 ## Running Locally
 
 The default local database is SQLite (`fluxpay.db`) when `DATABASE_URL` is not set. PostgreSQL can be used through the repository's Docker Compose configuration.
